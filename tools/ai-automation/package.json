@@ -1,0 +1,15 @@
+{
+  "name": "ai-automation-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI automation tools for BlockchainAI AutoBuilder",
+  "bin": {
+    "ai-generate": "./generate.js",
+    "ai-review": "./review.js",
+    "ai-optimize": "./optimize.js"
+  },
+  "dependencies": {
+    "commander": "^11.1.0",
+    "openai": "^4.20.1"
+  }
+}

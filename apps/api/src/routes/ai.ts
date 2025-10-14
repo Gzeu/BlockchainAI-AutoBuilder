@@ -2,6 +2,7 @@ import { Router } from 'express'
 import OpenAI from 'openai'
 import { body, validationResult } from 'express-validator'
 import { asyncHandler, createError } from '@/middleware/error-handler'
+import { authenticateToken, aiRateLimit } from '@/middleware/auth'
 import { logger } from '@/utils/logger'
 
 const router = Router()
@@ -10,6 +11,10 @@ const router = Router()
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 }) : null
+
+// All AI endpoints require authentication and rate limiting
+router.use(authenticateToken)
+router.use(aiRateLimit)
 
 // Generate code endpoint
 router.post('/generate-code',
@@ -28,6 +33,7 @@ router.post('/generate-code',
     }
 
     const { prompt, type, framework = 'react' } = req.body
+    const userId = req.user!.userId
 
     try {
       const systemPrompts = {
@@ -55,7 +61,13 @@ router.post('/generate-code',
 
       const generatedCode = completion.choices[0].message.content
 
-      logger.info(`AI code generated for type: ${type}, prompt: ${prompt.substring(0, 50)}...`)
+      // Log the AI request for analytics
+      logger.info(`AI code generated - User: ${userId}, Type: ${type}, Tokens: ${completion.usage?.total_tokens}`, {
+        userId,
+        type,
+        prompt: prompt.substring(0, 50) + '...',
+        tokensUsed: completion.usage?.total_tokens
+      })
 
       res.json({
         success: true,
@@ -66,7 +78,8 @@ router.post('/generate-code',
           metadata: {
             model: 'gpt-4',
             tokens: completion.usage?.total_tokens,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            userId
           }
         }
       })
@@ -94,6 +107,7 @@ router.post('/review-code',
     }
 
     const { code, language, context = '' } = req.body
+    const userId = req.user!.userId
 
     try {
       const completion = await openai.chat.completions.create({
@@ -122,7 +136,11 @@ Be specific and provide actionable feedback with examples.`
 
       const review = completion.choices[0].message.content
 
-      logger.info(`AI code review completed for ${language} code`)
+      logger.info(`AI code review completed - User: ${userId}, Language: ${language}, Tokens: ${completion.usage?.total_tokens}`, {
+        userId,
+        language,
+        tokensUsed: completion.usage?.total_tokens
+      })
 
       res.json({
         success: true,
@@ -132,7 +150,8 @@ Be specific and provide actionable feedback with examples.`
           metadata: {
             model: 'gpt-4',
             tokens: completion.usage?.total_tokens,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            userId
           }
         }
       })
@@ -160,6 +179,7 @@ router.post('/optimize-code',
     }
 
     const { code, language, goals = ['performance', 'readability'] } = req.body
+    const userId = req.user!.userId
 
     try {
       const completion = await openai.chat.completions.create({
@@ -167,15 +187,7 @@ router.post('/optimize-code',
         messages: [
           {
             role: 'system',
-            content: `You are a code optimization expert. Optimize the provided ${language} code focusing on: ${goals.join(', ')}. 
-
-Provide:
-1. Optimized code
-2. Explanation of changes
-3. Performance improvements
-4. Maintainability improvements
-
-Maintain the original functionality while improving the specified aspects.`
+            content: `You are a code optimization expert. Optimize the provided ${language} code focusing on: ${goals.join(', ')}. \n\nProvide:\n1. Optimized code\n2. Explanation of changes\n3. Performance improvements\n4. Maintainability improvements\n\nMaintain the original functionality while improving the specified aspects.`
           },
           {
             role: 'user',
@@ -188,7 +200,12 @@ Maintain the original functionality while improving the specified aspects.`
 
       const optimization = completion.choices[0].message.content
 
-      logger.info(`AI code optimization completed for ${language} code`)
+      logger.info(`AI code optimization completed - User: ${userId}, Language: ${language}, Tokens: ${completion.usage?.total_tokens}`, {
+        userId,
+        language,
+        goals,
+        tokensUsed: completion.usage?.total_tokens
+      })
 
       res.json({
         success: true,
@@ -199,7 +216,8 @@ Maintain the original functionality while improving the specified aspects.`
           metadata: {
             model: 'gpt-4',
             tokens: completion.usage?.total_tokens,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            userId
           }
         }
       })
@@ -226,6 +244,7 @@ router.post('/chat',
     }
 
     const { message, context = 'general' } = req.body
+    const userId = req.user!.userId
 
     try {
       const completion = await openai.chat.completions.create({
@@ -233,15 +252,7 @@ router.post('/chat',
         messages: [
           {
             role: 'system',
-            content: `You are a helpful assistant for the BlockchainAI AutoBuilder platform. You help developers with:
-- Next.js and React development
-- TypeScript programming
-- MultiversX blockchain integration
-- Smart contract development
-- Web3 technologies
-- DevOps and CI/CD
-
-Provide accurate, helpful, and concise responses.`
+            content: `You are a helpful assistant for the BlockchainAI AutoBuilder platform. You help developers with:\n- Next.js and React development\n- TypeScript programming\n- MultiversX blockchain integration\n- Smart contract development\n- Web3 technologies\n- DevOps and CI/CD\n\nProvide accurate, helpful, and concise responses.`
           },
           {
             role: 'user',
@@ -254,7 +265,11 @@ Provide accurate, helpful, and concise responses.`
 
       const response = completion.choices[0].message.content
 
-      logger.info(`AI chat response provided for context: ${context}`)
+      logger.info(`AI chat response provided - User: ${userId}, Context: ${context}, Tokens: ${completion.usage?.total_tokens}`, {
+        userId,
+        context,
+        tokensUsed: completion.usage?.total_tokens
+      })
 
       res.json({
         success: true,
@@ -264,7 +279,8 @@ Provide accurate, helpful, and concise responses.`
           metadata: {
             model: 'gpt-4',
             tokens: completion.usage?.total_tokens,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            userId
           }
         }
       })

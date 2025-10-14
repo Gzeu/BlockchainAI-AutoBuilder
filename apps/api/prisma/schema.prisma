@@ -1,0 +1,293 @@
+// Prisma schema for BlockchainAI AutoBuilder
+
+generator client {
+  provider = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// User model
+model User {
+  id          String   @id @default(cuid())
+  email       String   @unique
+  name        String
+  password    String
+  avatar      String?
+  bio         String?
+  location    String?
+  website     String?
+  githubId    String?  @unique
+  walletAddress String? @unique
+  
+  // Preferences
+  preferences Json     @default("{}")
+  
+  // Relations
+  projects    Project[]
+  aiRequests  AiRequest[]
+  sessions    Session[]
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("users")
+}
+
+// Session model for authentication
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("sessions")
+}
+
+// Project model
+model Project {
+  id          String      @id @default(cuid())
+  name        String
+  description String?
+  type        ProjectType
+  status      ProjectStatus @default(DRAFT)
+  
+  // Configuration
+  config      Json        @default("{}")
+  
+  // GitHub integration
+  githubRepo  String?
+  githubUrl   String?
+  
+  // Blockchain data
+  contractAddress String?
+  networkId   String?
+  
+  // AI generation tracking
+  aiGenerated Boolean     @default(false)
+  
+  // Relations
+  userId      String?
+  user        User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  files       ProjectFile[]
+  deployments Deployment[]
+  aiRequests  AiRequest[]
+  
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  
+  @@map("projects")
+}
+
+// Project files
+model ProjectFile {
+  id        String  @id @default(cuid())
+  filename  String
+  path      String
+  content   String
+  language  String?
+  size      Int     @default(0)
+  
+  // AI tracking
+  generatedByAi Boolean @default(false)
+  aiPrompt     String?
+  
+  // Relations
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@unique([projectId, path])
+  @@map("project_files")
+}
+
+// AI request tracking
+model AiRequest {
+  id            String        @id @default(cuid())
+  type          AiRequestType
+  prompt        String
+  response      String?
+  status        RequestStatus @default(PENDING)
+  
+  // Context
+  context       Json          @default("{}")
+  
+  // Usage tracking
+  tokensUsed    Int?          @default(0)
+  model         String?       @default("gpt-4")
+  
+  // Error tracking
+  error         String?
+  
+  // Relations
+  userId        String?
+  user          User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  projectId     String?
+  project       Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  
+  @@map("ai_requests")
+}
+
+// Deployment tracking
+model Deployment {
+  id            String           @id @default(cuid())
+  environment   DeploymentEnv
+  status        DeploymentStatus @default(PENDING)
+  
+  // Deployment details
+  url           String?
+  commitHash    String?
+  branch        String           @default("main")
+  
+  // Platform specific
+  platform      String           // vercel, railway, render, etc.
+  platformId    String?
+  
+  // Logs and metadata
+  logs          String?
+  metadata      Json             @default("{}")
+  
+  // Error tracking
+  error         String?
+  
+  // Relations
+  projectId     String
+  project       Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  
+  @@map("deployments")
+}
+
+// Template system
+model Template {
+  id          String         @id @default(cuid())
+  name        String         @unique
+  description String?
+  category    TemplateCategory
+  
+  // Template data
+  config      Json           @default("{}")
+  files       Json           @default("{}")
+  
+  // Metadata
+  version     String         @default("1.0.0")
+  author      String?
+  tags        String[]
+  
+  // Usage tracking
+  downloads   Int            @default(0)
+  stars       Int            @default(0)
+  
+  // Status
+  active      Boolean        @default(true)
+  featured    Boolean        @default(false)
+  
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  
+  @@map("templates")
+}
+
+// Analytics and metrics
+model Analytics {
+  id        String      @id @default(cuid())
+  event     String      // event name
+  data      Json        @default("{}")
+  
+  // Context
+  userId    String?
+  projectId String?
+  sessionId String?
+  
+  // Metadata
+  userAgent String?
+  ip        String?
+  country   String?
+  
+  createdAt DateTime    @default(now())
+  
+  @@index([event, createdAt])
+  @@index([userId, createdAt])
+  @@map("analytics")
+}
+
+// Enums
+enum ProjectType {
+  WEB3_APP
+  SMART_CONTRACT
+  DAPP
+  DEFI
+  NFT
+  DAO
+  MARKETPLACE
+  GAME
+  OTHER
+}
+
+enum ProjectStatus {
+  DRAFT
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+  ERROR
+}
+
+enum AiRequestType {
+  CODE_GENERATION
+  CODE_REVIEW
+  CODE_OPTIMIZATION
+  DOCUMENTATION
+  TESTING
+  DEBUGGING
+  CHAT
+}
+
+enum RequestStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum DeploymentEnv {
+  DEVELOPMENT
+  STAGING
+  PRODUCTION
+}
+
+enum DeploymentStatus {
+  PENDING
+  BUILDING
+  DEPLOYING
+  SUCCESS
+  FAILED
+  CANCELLED
+}
+
+enum TemplateCategory {
+  FRONTEND
+  BACKEND
+  FULLSTACK
+  SMART_CONTRACT
+  MOBILE
+  DESKTOP
+  CLI
+  LIBRARY
+  BOILERPLATE
+}

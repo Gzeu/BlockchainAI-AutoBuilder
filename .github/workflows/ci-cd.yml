@@ -1,0 +1,427 @@
+name: 🚀 CI/CD Pipeline - BlockchainAI AutoBuilder
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '20'
+  PNPM_VERSION: '8'
+  REGISTRY_URL: 'https://npm.pkg.github.com'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+
+jobs:
+  # 🧪 Setup and Lint Jobs
+  setup-and-lint:
+    name: 🧪 Setup & Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+      - name: 📋 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🔧 Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: ${{ env.REGISTRY_URL }}
+
+      - name: 📦 Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: 🗄️ Get pnpm store directory
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: 📆 Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: 🚀 Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: 🧪 ESLint Check
+        run: pnpm lint
+
+      - name: 🎨 Prettier Check
+        run: pnpm format:check
+
+      - name: 📋 TypeScript Check
+        run: pnpm typecheck
+
+  # 🧪 Unit Tests
+  unit-tests:
+    name: 🧪 Unit Tests
+    runs-on: ubuntu-latest
+    needs: setup-and-lint
+    timeout-minutes: 20
+    
+    strategy:
+      matrix:
+        workspace: [web, api, smart-contracts]
+        
+    steps:
+      - name: 📋 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 📦 Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: 📆 Restore pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+
+      - name: 🚀 Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: 🧪 Run Unit Tests - ${{ matrix.workspace }}
+        run: pnpm test:unit --filter=${{ matrix.workspace }}
+
+      - name: 📈 Upload Coverage
+        if: matrix.workspace == 'web'
+        uses: codecov/codecov-action@v3
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./apps/web/coverage/lcov.info
+          flags: unit-tests
+          name: unit-tests-coverage
+
+  # 🏗️ Build Applications
+  build:
+    name: 🏗️ Build Apps
+    runs-on: ubuntu-latest
+    needs: [setup-and-lint, unit-tests]
+    timeout-minutes: 25
+    
+    strategy:
+      matrix:
+        workspace: [web, api]
+        
+    steps:
+      - name: 📋 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 📦 Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: 🚀 Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: 🏗️ Build ${{ matrix.workspace }}
+        run: pnpm build --filter=${{ matrix.workspace }}
+        env:
+          NEXT_PUBLIC_APP_ENV: production
+          NODE_ENV: production
+
+      - name: 📆 Cache Build Artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            apps/${{ matrix.workspace }}/.next
+            apps/${{ matrix.workspace }}/dist
+          key: build-${{ matrix.workspace }}-${{ github.sha }}
+
+  # 🧪 E2E Tests
+  e2e-tests:
+    name: 🧪 E2E Tests
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 30
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    
+    steps:
+      - name: 📋 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 📦 Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: 🚀 Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: 📆 Restore Build Cache - web
+        uses: actions/cache@v4
+        with:
+          path: apps/web/.next
+          key: build-web-${{ github.sha }}
+
+      - name: 📆 Restore Build Cache - api
+        uses: actions/cache@v4
+        with:
+          path: apps/api/dist
+          key: build-api-${{ github.sha }}
+
+      - name: 🔧 Setup Database
+        run: |
+          pnpm prisma:migrate:dev
+          pnpm prisma:seed
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+
+      - name: 🚀 Start Applications
+        run: |
+          pnpm dev:api &
+          pnpm dev:web &
+          sleep 30
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+          NODE_ENV: test
+
+      - name: 🧪 Run E2E Tests
+        run: pnpm test:e2e
+        env:
+          CYPRESS_BASE_URL: http://localhost:3000
+          API_BASE_URL: http://localhost:3001
+
+      - name: 📈 Upload E2E Videos
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-videos
+          path: tests/e2e/videos/
+          retention-days: 7
+
+  # 🔒 Security Audit
+  security-audit:
+    name: 🔒 Security Audit
+    runs-on: ubuntu-latest
+    needs: setup-and-lint
+    timeout-minutes: 10
+    
+    steps:
+      - name: 📋 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 📦 Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: 🚀 Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: 🔒 Run Security Audit
+        run: pnpm audit --audit-level moderate
+
+      - name: 🔍 Run CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          languages: javascript,typescript
+
+  # 🚀 Deploy to Staging
+  deploy-staging:
+    name: 🚀 Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build, e2e-tests, security-audit]
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+    environment: staging
+    timeout-minutes: 15
+    
+    steps:
+      - name: 📋 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🚀 Deploy Frontend to Vercel (Staging)
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          working-directory: ./apps/web
+          scope: ${{ secrets.VERCEL_ORG_ID }}
+
+      - name: 🚀 Deploy Backend to Railway (Staging)
+        uses: bervProject/railway-deploy@v1.0.0
+        with:
+          railway_token: ${{ secrets.RAILWAY_TOKEN }}
+          service: 'api-staging'
+          detach: false
+
+      - name: 📧 Notify Deployment Status
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          channel: '#deployments'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+
+  # 🌐 Deploy to Production
+  deploy-production:
+    name: 🌐 Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build, e2e-tests, security-audit]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: production
+    timeout-minutes: 20
+    
+    steps:
+      - name: 📋 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 📦 Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: 📆 Restore Build Cache - web
+        uses: actions/cache@v4
+        with:
+          path: apps/web/.next
+          key: build-web-${{ github.sha }}
+
+      - name: 🚀 Deploy Frontend to Vercel (Production)
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          working-directory: ./apps/web
+          vercel-args: '--prod'
+          scope: ${{ secrets.VERCEL_ORG_ID }}
+
+      - name: 🚀 Deploy Backend to Railway (Production)
+        uses: bervProject/railway-deploy@v1.0.0
+        with:
+          railway_token: ${{ secrets.RAILWAY_TOKEN }}
+          service: 'api-production'
+          detach: false
+
+      - name: 🔗 Deploy Smart Contracts
+        run: |
+          echo "Deploying smart contracts to MultiversX..."
+          # Aici vor fi comenzile pentru deploy smart contracts
+        env:
+          MULTIVERSX_PRIVATE_KEY: ${{ secrets.MULTIVERSX_PRIVATE_KEY }}
+          MULTIVERSX_NETWORK: 'mainnet'
+
+      - name: 📧 Notify Success
+        uses: 8398a7/action-slack@v3
+        with:
+          status: 'success'
+          channel: '#deployments'
+          text: '🎉 Production deployment successful! 🚀'
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+
+      - name: 📊 Update Deployment Status
+        uses: bobheadxi/deployments@v1
+        with:
+          step: finish
+          token: ${{ secrets.GITHUB_TOKEN }}
+          status: ${{ job.status }}
+          deployment_id: ${{ steps.deployment.outputs.deployment_id }}
+          env_url: https://blockchainai-autobuilder.vercel.app
+
+  # 🤖 AI Code Review
+  ai-code-review:
+    name: 🤖 AI Code Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 10
+    
+    steps:
+      - name: 📋 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🤖 AI Code Review
+        uses: coderabbitai/ai-pr-reviewer@latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        with:
+          debug: false
+          review_simple_changes: false
+          review_comment_lgtm: false
+
+  # 📈 Performance Monitoring
+  lighthouse-audit:
+    name: 📈 Lighthouse Audit
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    if: github.ref == 'refs/heads/develop'
+    timeout-minutes: 15
+    
+    steps:
+      - name: 📋 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 📈 Lighthouse CI
+        uses: treosh/lighthouse-ci-action@v10
+        with:
+          configPath: './lighthouserc.js'
+          urls: |
+            https://blockchainai-autobuilder-staging.vercel.app
+          uploadArtifacts: true
+          temporaryPublicStorage: true
+
+      - name: 📈 Comment PR with Results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const results = JSON.parse(fs.readFileSync('./lhci_reports/manifest.json'));
+            // Process and comment lighthouse results
